@@ -132,7 +132,7 @@ local DEFAULT_CONFIG = {
     },
 
     Name = {
-        Enabled = true, Color = Color3.fromRGB(255, 255, 255), Size = 14,
+        Enabled = true, Color = Color3.fromRGB(255, 255, 255), Size = 17,
         Font = Enum.Font.GothamBold, Outline = true, UseDisplayName = true,
         Prefix = "", Suffix = "", ShowHealth = false, ShowDistance = false,
         MaxLength = 32, Rainbow = false,
@@ -142,7 +142,7 @@ local DEFAULT_CONFIG = {
         Enabled = true, Width = 3, Offset = 6, Position = "Left",
         HighColor = Color3.fromRGB(0, 255, 120), LowColor = Color3.fromRGB(255, 40, 40),
         SmoothTransition = true, ShowText = false,
-        TextColor = Color3.fromRGB(255, 255, 255), TextSize = 11, Rainbow = false,
+        TextColor = Color3.fromRGB(255, 255, 255), TextSize = 13, Rainbow = false,
     },
 
     HeadDot = {
@@ -152,7 +152,7 @@ local DEFAULT_CONFIG = {
     },
 
     Distance = {
-        Enabled = true, Color = Color3.fromRGB(180, 180, 200), Size = 12,
+        Enabled = true, Color = Color3.fromRGB(180, 180, 200), Size = 14,
         Font = Enum.Font.Gotham, Suffix = "m", Rainbow = false,
     },
 
@@ -244,9 +244,9 @@ NeonESP.Presets = {
         Glow = { Enabled = false },
         Rainbow = { Enabled = false },
         Box = { Enabled = true, Mode = "2D", Thickness = 1, Transparency = 0.6, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(176, 130, 255) },
-        Name = { Enabled = true, Color = Color3.fromRGB(220, 200, 255) },
-        HealthBar = { Enabled = true, ShowText = true, HighColor = Color3.fromRGB(176, 130, 255), LowColor = Color3.fromRGB(90, 40, 140) },
-        Distance = { Enabled = true, Color = Color3.fromRGB(180, 160, 220) },
+        Name = { Enabled = true, Color = Color3.fromRGB(220, 200, 255), Size = 16 },
+        HealthBar = { Enabled = true, ShowText = true, TextSize = 13, HighColor = Color3.fromRGB(176, 130, 255), LowColor = Color3.fromRGB(90, 40, 140) },
+        Distance = { Enabled = true, Color = Color3.fromRGB(180, 160, 220), Size = 14 },
         Tracers = { Enabled = true, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(140, 90, 220) },
         HeadDot = { Enabled = true, Color = Color3.fromRGB(230, 215, 255) },
         OffscreenArrows = { Enabled = true, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(220, 200, 255), Transparency = 0.8 },
