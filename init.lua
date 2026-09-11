@@ -73,6 +73,43 @@ local function removeDrawing(d)
     if d then pcall(function() d:Remove() end) end
 end
 
+local function makeGui(root, class, props)
+    local ok, inst = pcall(function()
+        local o = Instance.new(class)
+        for k, v in pairs(props) do o[k] = v end
+        o.Parent = root
+        return o
+    end)
+    return ok and inst or nil
+end
+
+local function removeGuis(esp)
+    local g = esp.gui
+    if not g then return end
+    for _, obj in pairs(g) do
+        if type(obj) == "table" then
+            for _, o in pairs(obj) do
+                if o and o:IsA("Instance") then pcall(function() o:Destroy() end) end
+            end
+        elseif obj and obj:IsA("Instance") then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+    esp.gui = nil
+end
+
+local function guiSetVisible(esp, key, vis)
+    local g = esp.gui and esp.gui[key]
+    if not g then return end
+    if type(g) == "table" then
+        for _, o in pairs(g) do
+            if o then o.Visible = vis end
+        end
+    else
+        g.Visible = vis
+    end
+end
+
 
 local BONE_CONNECTIONS = {
     {"Head", "UpperTorso"},
@@ -112,7 +149,12 @@ local DEFAULT_CONFIG = {
 
     Rainbow = { Enabled = false, Speed = 2, PerPlayer = false },
 
-    UseTeamColor = false,
+UseTeamColor = false,
+
+    Gui = {
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    },
 
     
     Smooth = { Enabled = true, Speed = 0.5 },
@@ -125,6 +167,7 @@ local DEFAULT_CONFIG = {
 
     Box = {
         Enabled = true, Mode = "Corner",
+        Method = "Drawing",
         Color = Color3.fromRGB(0, 180, 255),
         SecondaryColor = Color3.fromRGB(80, 120, 200),
         Thickness = 1.25, Transparency = 0.85,
@@ -135,7 +178,7 @@ local DEFAULT_CONFIG = {
         Enabled = true, Color = Color3.fromRGB(255, 255, 255), Size = 17,
         Font = Enum.Font.GothamBold, Outline = true, UseDisplayName = true,
         Prefix = "", Suffix = "", ShowHealth = false, ShowDistance = false,
-        MaxLength = 32, Rainbow = false,
+        MaxLength = 32, Rainbow = false, Method = "Drawing",
     },
 
     HealthBar = {
@@ -143,23 +186,24 @@ local DEFAULT_CONFIG = {
         HighColor = Color3.fromRGB(0, 255, 120), LowColor = Color3.fromRGB(255, 40, 40),
         SmoothTransition = true, ShowText = false,
         TextColor = Color3.fromRGB(255, 255, 255), TextSize = 13, Rainbow = false,
+        Method = "Drawing",
     },
 
     HeadDot = {
         Enabled = true, Color = Color3.fromRGB(255, 255, 255),
         OutlineColor = Color3.fromRGB(40, 40, 40), Size = 5, Transparency = 0.85,
-        Outline = true, Rainbow = false,
+        Outline = true, Rainbow = false, Method = "Drawing",
     },
 
     Distance = {
         Enabled = true, Color = Color3.fromRGB(180, 180, 200), Size = 14,
-        Font = Enum.Font.Gotham, Suffix = "m", Rainbow = false,
+        Font = Enum.Font.Gotham, Suffix = "m", Rainbow = false, Method = "Drawing",
     },
 
     Tracers = {
         Enabled = false, Origin = "Bottom",
         Color = Color3.fromRGB(0, 180, 255), SecondaryColor = Color3.fromRGB(200, 220, 255),
-        Thickness = 1, Transparency = 0.5, Rainbow = false,
+        Thickness = 1, Transparency = 0.5, Rainbow = false, Method = "Drawing",
     },
 
     Skeleton = {
@@ -169,7 +213,7 @@ local DEFAULT_CONFIG = {
 
     ToolESP = {
         Enabled = false, Color = Color3.fromRGB(255, 220, 50), Size = 12,
-        Font = Enum.Font.Gotham, Brackets = true, Rainbow = false,
+        Font = Enum.Font.Gotham, Brackets = true, Rainbow = false, Method = "Drawing",
     },
 
     ToolHighlight = {
@@ -186,6 +230,7 @@ local DEFAULT_CONFIG = {
         Enabled = true, Color = Color3.fromRGB(0, 180, 255),
         SecondaryColor = Color3.fromRGB(255, 255, 255), Size = 18, Width = 12,
         Margin = 40, Transparency = 0.85, ShowDistance = true, Rainbow = false,
+        Method = "Drawing",
     },
 }
 
@@ -348,6 +393,7 @@ local function rebuildBox(c)
         return
     end
     c.boxOffset = root.CFrame:ToObjectSpace(bbCF)
+    c.bbSize = bbSize
     local hx, hy, hz = bbSize.X * 0.5, bbSize.Y * 0.5, bbSize.Z * 0.5
     c.sizeY = bbSize.Y
     c.sizeX = clamp(bbSize.X, bbSize.Y * 0.35, bbSize.Y * 0.6) 
@@ -391,6 +437,28 @@ function NeonESP.new(config)
     self._lastTime  = 0
     self._localRoot = nil
     self._rainbow   = false
+
+    self._guiRoot = Instance.new("ScreenGui")
+    self._guiRoot.Name = "NeonESP_Gui_" .. tostring(ID)
+    self._guiRoot.IgnoreGuiInset = self.Config.Gui.IgnoreGuiInset
+    self._guiRoot.ZIndexBehavior = self.Config.Gui.ZIndexBehavior
+    local placed = false
+    local parens = {
+        function() return game:GetService("CoreGui") end,
+        function() return game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui", 5) end,
+        function() return workspace end,
+    }
+    for _, fn in ipairs(parens) do
+        local ok, par = pcall(fn)
+        if ok and par then
+            local ok2 = pcall(function() self._guiRoot.Parent = par end)
+            if ok2 then
+                placed = true
+                break
+            end
+        end
+    end
+    self._guiReady = placed
 
     ID = ID + 1
     self._id = ID
@@ -605,7 +673,143 @@ function NeonESP:_createESP()
         end
     end
 
+    if self._guiReady then
+        self:_createGui(esp, c)
+    end
+
     return esp
+end
+
+function NeonESP:_createGui(esp, c)
+    if not self._guiRoot then return end
+    local root = self._guiRoot
+    local g = {}
+
+    local makeLabel = function(size, font)
+        return makeGui(root, "TextLabel", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Font = font or Enum.Font.GothamBold,
+            TextSize = size,
+            Text = "",
+            TextColor3 = Color3.new(1, 1, 1),
+            TextStrokeColor3 = Color3.new(0, 0, 0),
+            TextStrokeTransparency = 0.2,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.fromOffset(0, size + 4),
+            Visible = false,
+            ZIndex = 5,
+        })
+    end
+
+    local makeBoxFrame = function()
+        return makeGui(root, "Frame", {
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BackgroundTransparency = 0,
+            BorderSizePixel = 0,
+            AnchorPoint = Vector2.new(0, 0.5),
+            Size = UDim2.fromOffset(0, 1),
+            Visible = false,
+            ZIndex = 4,
+        })
+    end
+
+    if c.Box.Method == "Adornment" and c.Box.Enabled then
+        local ok, ad = pcall(function()
+            local a = Instance.new("BoxHandleAdornment")
+            a.Name = "NeonESP_Adorn"
+            a.Size = Vector3.new(4, 4, 4)
+            a.CFrame = CFrame.new()
+            a.Color = c.Box.Color
+            a.Transparency = 1 - c.Box.Transparency
+            a.AlwaysOnTop = true
+            a.Adornee = nil
+            a.Visible = true
+            a.ZIndex = 5
+            return a
+        end)
+        g.Adorn = ok and ad or nil
+        if g.Adorn then
+            pcall(function() g.Adorn.Parent = root end)
+        end
+    elseif c.Box.Method == "Gui" and c.Box.Enabled then
+        g.Box = {}
+        for i = 1, 8 do
+            g.Box[i] = makeBoxFrame()
+        end
+    end
+
+    if c.Name.Enabled and c.Name.Method == "Gui" then
+        g.Name = makeLabel(c.Name.Size)
+    end
+    if c.Distance.Enabled and c.Distance.Method == "Gui" then
+        g.Distance = makeLabel(c.Distance.Size, Enum.Font.Gotham)
+    end
+    if c.ToolESP.Enabled and c.ToolESP.Method == "Gui" then
+        g.ToolText = makeLabel(c.ToolESP.Size, Enum.Font.Gotham)
+    end
+    if c.HealthBar.Enabled and c.HealthBar.Method == "Gui" then
+        g.HBarBG = makeGui(root, "Frame", {
+            BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 0.2,
+            BorderSizePixel = 0,
+            AnchorPoint = Vector2.new(0, 0),
+            Size = UDim2.fromOffset(0, 0),
+            Visible = false,
+            ZIndex = 3,
+        })
+        g.HBarFill = makeGui(root, "Frame", {
+            BackgroundColor3 = Color3.new(0, 1, 0.5),
+            BackgroundTransparency = 0,
+            BorderSizePixel = 0,
+            AnchorPoint = Vector2.new(0, 0),
+            Size = UDim2.fromOffset(0, 0),
+            Visible = false,
+            ZIndex = 4,
+        })
+        if c.HealthBar.ShowText then
+            g.HText = makeLabel(c.HealthBar.TextSize)
+        end
+    end
+    if c.HeadDot.Enabled and c.HeadDot.Method == "Gui" then
+        g.HeadDot = makeGui(root, "Frame", {
+            BackgroundColor3 = c.HeadDot.Color,
+            BackgroundTransparency = 0,
+            BorderSizePixel = 0,
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Size = UDim2.fromOffset(c.HeadDot.Size, c.HeadDot.Size),
+            Visible = false,
+            ZIndex = 4,
+        })
+    end
+    if c.Tracers.Enabled and c.Tracers.Method == "Gui" then
+        g.Tracer = makeBoxFrame()
+    end
+    if c.OffscreenArrows.Enabled and c.OffscreenArrows.Method == "Gui" then
+        g.Arrow = makeGui(root, "TextLabel", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Font = Enum.Font.GothamBold,
+            TextSize = c.OffscreenArrows.Size + 2,
+            Text = "▲",
+            TextColor3 = c.OffscreenArrows.Color,
+            TextStrokeColor3 = Color3.new(0, 0, 0),
+            TextStrokeTransparency = 0.2,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.fromOffset(0, c.OffscreenArrows.Size + 4),
+            Visible = false,
+            ZIndex = 5,
+        })
+        if c.OffscreenArrows.ShowDistance then
+            g.ArrowText = makeLabel(11, Enum.Font.Gotham)
+        end
+    end
+
+    esp.gui = g
 end
 
 
@@ -639,6 +843,20 @@ function NeonESP:_hideMain(esp)
         if esp.TracerGlow then esp.TracerGlow.Visible = false end
         if esp.ToolText then esp.ToolText.Visible = false end
     end
+    if esp.gui then
+        guiSetVisible(esp, "Name", false)
+        guiSetVisible(esp, "Distance", false)
+        guiSetVisible(esp, "ToolText", false)
+        guiSetVisible(esp, "HBarBG", false)
+        guiSetVisible(esp, "HBarFill", false)
+        guiSetVisible(esp, "HText", false)
+        guiSetVisible(esp, "HeadDot", false)
+        guiSetVisible(esp, "Tracer", false)
+        guiSetVisible(esp, "Arrow", false)
+        guiSetVisible(esp, "ArrowText", false)
+        guiSetVisible(esp, "Box", false)
+        guiSetVisible(esp, "Adorn", false)
+    end
 end
 
 function NeonESP:_hideArrow(esp)
@@ -651,6 +869,8 @@ function NeonESP:_hideArrow(esp)
         if O and O[i] then O[i].Visible = false end
     end
     if esp.ArrowText then esp.ArrowText.Visible = false end
+    guiSetVisible(esp, "Arrow", false)
+    guiSetVisible(esp, "ArrowText", false)
 end
 
 function NeonESP:_hideESP(esp)
@@ -686,8 +906,32 @@ function NeonESP:_destroyESP(esp)
         if esp.SkeletonLines then removeDrawing(esp.SkeletonLines[i]) end
         if esp.SkeletonGlow then removeDrawing(esp.SkeletonGlow[i]) end
     end
+    removeGuis(esp)
 end
 
+
+function NeonESP:_drawGuiBox(esp, bx, by, w, h, col, a)
+    local g = esp.gui and esp.gui.Box
+    if not g then return end
+    local th = clamp(self.Config.Box.Thickness, 1, 20)
+    local hw = w + th
+    local hh = h + th
+    if g[1] then g[1].Position = UDim2.fromOffset(bx, by + th * 0.5); g[1].Size = UDim2.fromOffset(hw, th) end
+    if g[3] then g[3].Position = UDim2.fromOffset(bx, by + h + th * 0.5); g[3].Size = UDim2.fromOffset(hw, th) end
+    if g[2] then g[2].Position = UDim2.fromOffset(bx + w, by + hh * 0.5); g[2].Size = UDim2.fromOffset(th, hh) end
+    if g[4] then g[4].Position = UDim2.fromOffset(bx, by + hh * 0.5); g[4].Size = UDim2.fromOffset(th, hh) end
+    for i = 1, 4 do
+        local f = g[i]
+        if f then
+            f.BackgroundColor3 = col
+            f.BackgroundTransparency = 1 - a
+            f.Visible = true
+        end
+    end
+    for i = 5, 8 do
+        if g[i] then g[i].Visible = false end
+    end
+end
 
 function NeonESP:_drawCornerBox(esp, bx, by, w, h, a, col, glowCol)
     applyBoxColors(esp, col, glowCol)
@@ -783,6 +1027,37 @@ function NeonESP:_renderArrow(player, esp, tipX, tipY, dirX, dirY, alpha, dt, di
     local rX, rY = bCx - perpX * hw, bCy - perpY * hw
 
     local col = self:_color(player, ac.Rainbow, ac.Color)
+
+    if ac.Method == "Gui" and esp.gui and esp.gui.Arrow then
+        local gl = esp.gui.Arrow
+        local rot = atan2(dirY, dirX) * 180 / math.pi + 90
+        gl.Position = UDim2.fromOffset(px, py)
+        gl.Rotation = rot
+        gl.TextColor3 = col
+        gl.TextTransparency = 1 - a
+        gl.Visible = true
+        for i = 1, 3 do
+            if M and M[i] then M[i].Visible = false end
+            if G and G[i] then G[i].Visible = false end
+            if O and O[i] then O[i].Visible = false end
+        end
+        if ac.ShowDistance and esp.gui.ArrowText then
+            local s = format("%.0f", dist) .. cfg.Distance.Suffix
+            if esp._atS ~= s then
+                esp._atS = s
+                esp.gui.ArrowText.Text = s
+            end
+            esp.gui.ArrowText.Position = UDim2.fromOffset(bCx + dirX * (size + 12), bCy + dirY * (size + 12))
+            esp.gui.ArrowText.TextTransparency = 1 - a
+            esp.gui.ArrowText.TextColor3 = col
+            esp.gui.ArrowText.Visible = true
+        elseif esp.gui.ArrowText then
+            esp.gui.ArrowText.Visible = false
+        end
+        if esp.ArrowText then esp.ArrowText.Visible = false end
+        return
+    end
+
     local M, G, O = esp.ArrowLines, esp.ArrowGlowLines, esp.ArrowOutlines
 
     if M and esp._amC ~= col then
@@ -1057,7 +1332,32 @@ function NeonESP:_updatePlayer(player, esp, dt)
             end
         end
 
-        if mode3D then
+        if cB.Method == "Adornment" and esp.gui and esp.gui.Adorn then
+            local ad = esp.gui.Adorn
+            if c.bbSize then
+                ad.Size = c.bbSize
+                ad.CFrame = root.CFrame * c.boxOffset
+                ad.Color = boxCol
+                ad.Transparency = 1 - a
+                ad.Visible = true
+            else
+                ad.Visible = false
+            end
+            esp._boxOn = false
+            for i = 1, 12 do
+                if esp.BoxLines and esp.BoxLines[i] then esp.BoxLines[i].Visible = false end
+                if esp.BoxOutline and esp.BoxOutline[i] then esp.BoxOutline[i].Visible = false end
+                if esp.BoxGlow and esp.BoxGlow[i] then esp.BoxGlow[i].Visible = false end
+            end
+        elseif cB.Method == "Gui" and esp.gui and esp.gui.Box then
+            self:_drawGuiBox(esp, bx, by, sw, sh, boxCol, a)
+            esp._boxOn = false
+            for i = 1, 12 do
+                if esp.BoxLines and esp.BoxLines[i] then esp.BoxLines[i].Visible = false end
+                if esp.BoxOutline and esp.BoxOutline[i] then esp.BoxOutline[i].Visible = false end
+                if esp.BoxGlow and esp.BoxGlow[i] then esp.BoxGlow[i].Visible = false end
+            end
+        elseif mode3D then
             self:_draw3DBox(esp, a, boxCol, glowCol)
         elseif cB.Mode == "Corner" then
             self:_drawCornerBox(esp, bx, by, sw, sh, a, boxCol, glowCol)
@@ -1071,28 +1371,46 @@ function NeonESP:_updatePlayer(player, esp, dt)
         local n = cfg.Name
         local dn = n.UseDisplayName and player.DisplayName or player.Name
         local hpInt = floor(hum.Health + 0.5)
+        local text
         if esp._nBase ~= dn
             or (n.ShowDistance and esp._nDist ~= distInt)
             or (n.ShowHealth and esp._nHp ~= hpInt) then
             esp._nBase = dn
             if n.ShowDistance then esp._nDist = distInt end
             if n.ShowHealth then esp._nHp = hpInt end
-            local text = dn
-            if n.Prefix ~= "" then text = n.Prefix .. " " .. text end
-            if n.Suffix ~= "" then text = text .. " " .. n.Suffix end
-            if n.ShowDistance then text = text .. " " .. format("%.0f", dist) .. cfg.Distance.Suffix end
-            if n.ShowHealth then text = text .. " " .. hpInt end
-            if #text > n.MaxLength then text = text:sub(1, n.MaxLength) .. "…" end
+            local t = dn
+            if n.Prefix ~= "" then t = n.Prefix .. " " .. t end
+            if n.Suffix ~= "" then t = t .. " " .. n.Suffix end
+            if n.ShowDistance then t = t .. " " .. format("%.0f", dist) .. cfg.Distance.Suffix end
+            if n.ShowHealth then t = t .. " " .. hpInt end
+            if #t > n.MaxLength then t = t:sub(1, n.MaxLength) .. "…" end
+            text = t
             esp.Name.Text = text
         end
-        esp.Name.Position = V2.new(cx, by - 18)
         local ncol = self:_color(player, n.Rainbow, n.Color)
-        if esp._nc ~= ncol then
-            esp._nc = ncol
-            esp.Name.Color = ncol
+        if n.Method == "Gui" and esp.gui and esp.gui.Name then
+            local gl = esp.gui.Name
+            if esp._nBase and esp._nGText ~= esp.Name.Text then
+                gl.Text = esp.Name.Text
+                esp._nGText = esp.Name.Text
+            end
+            gl.Position = UDim2.fromOffset(cx, by - 18)
+            gl.TextColor3 = ncol
+            gl.TextTransparency = 1 - a
+            gl.TextStrokeTransparency = 1 - a
+            gl.TextSize = n.Size
+            gl.Size = UDim2.fromOffset(0, n.Size + 4)
+            gl.Visible = true
+            esp.Name.Visible = false
+        else
+            esp.Name.Position = V2.new(cx, by - 18)
+            if esp._nc ~= ncol then
+                esp._nc = ncol
+                esp.Name.Color = ncol
+            end
+            esp.Name.Transparency = a
+            esp.Name.Visible = true
         end
-        esp.Name.Transparency = a
-        esp.Name.Visible = true
     end
 
     
@@ -1121,41 +1439,27 @@ function NeonESP:_updatePlayer(player, esp, dt)
         end
 
         local bg = esp.HealthBG
-        bg.Position = bgPos
-        bg.Size = bgSize
-        bg.Transparency = a * 0.8
-        bg.Visible = true
-
-        if esp.HealthBorder then
-            local bd = esp.HealthBorder
-            bd.Position = V2.new(bgPos.X - 1, bgPos.Y - 1)
-            bd.Size = V2.new(bgSize.X + 2, bgSize.Y + 2)
-            bd.Transparency = a * 0.4
-            bd.Visible = true
-        end
-
-        local fill = esp.HealthFill
-        fill.Position = fillPos
-        fill.Size = fillSize
         local hpCol = (hb.Rainbow and self._rainbow) and self:_rainbowColor(player)
             or hb.LowColor:Lerp(hb.HighColor, pct)
-        if esp._hc ~= hpCol then
-            esp._hc = hpCol
-            fill.Color = hpCol
-        end
-        fill.Transparency = a
-        fill.Visible = true
+        local gHgui = hb.Method == "Gui" and esp.gui and esp.gui.HBarBG
 
-        if hb.ShowText then
-            local ht = esp.HealthText
-            if not ht then
-                ht = makeDrawing("Text", {
-                    Size = hb.TextSize, Font = Enum.Font.GothamBold,
-                    Outline = true, OutlineColor = BLACK, Center = true, Visible = false,
-                })
-                esp.HealthText = ht
-            end
-            if ht then
+        if gHgui then
+            local bgf, fl = esp.gui.HBarBG, esp.gui.HBarFill
+            bgf.Position = UDim2.fromOffset(bgPos.X, bgPos.Y)
+            bgf.Size = UDim2.fromOffset(bgSize.X, bgSize.Y)
+            bgf.BackgroundTransparency = 1 - (a * 0.8)
+            bgf.Visible = true
+
+            fl.Position = UDim2.fromOffset(fillPos.X, fillPos.Y)
+            fl.Size = UDim2.fromOffset(fillSize.X, fillSize.Y)
+            fl.BackgroundColor3 = hpCol
+            fl.BackgroundTransparency = 1 - a
+            fl.Visible = true
+            if esp.HealthBG then esp.HealthBG.Visible = false end
+            if esp.HealthFill then esp.HealthFill.Visible = false end
+            if esp.HealthBorder then esp.HealthBorder.Visible = false end
+            if hb.ShowText and esp.gui.HText then
+                local ht = esp.gui.HText
                 local hpNow = floor(hum.Health + 0.5)
                 if esp._hpT ~= hpNow or esp._hpM ~= hum.MaxHealth then
                     esp._hpT, esp._hpM = hpNow, hum.MaxHealth
@@ -1165,19 +1469,73 @@ function NeonESP:_updatePlayer(player, esp, dt)
                 if isBottom then
                     tx, ty = cx, by + sh + hb.Offset + barW + 2
                 else
-                    tx, ty = bx + sw + hb.Offset + barW + 6, by + sh * 0.5 - hb.TextSize * 0.5
+                    tx, ty = bx + sw + hb.Offset + barW + 6, by + sh * 0.5
                 end
-                ht.Position = V2.new(tx, ty)
-                local htc = self:_color(player, false, hb.TextColor)
-                if esp._hTc ~= htc then
-                    esp._hTc = htc
-                    ht.Color = htc
-                end
-                ht.Transparency = a
+                ht.Position = UDim2.fromOffset(tx, ty)
+                ht.TextColor3 = self:_color(player, false, hb.TextColor)
+                ht.TextTransparency = 1 - a
                 ht.Visible = true
+            elseif esp.HealthText then
+                esp.HealthText.Visible = false
             end
-        elseif esp.HealthText then
-            esp.HealthText.Visible = false
+            if esp.HealthText then esp.HealthText.Visible = false end
+        else
+            bg.Position = bgPos
+            bg.Size = bgSize
+            bg.Transparency = a * 0.8
+            bg.Visible = true
+
+            if esp.HealthBorder then
+                local bd = esp.HealthBorder
+                bd.Position = V2.new(bgPos.X - 1, bgPos.Y - 1)
+                bd.Size = V2.new(bgSize.X + 2, bgSize.Y + 2)
+                bd.Transparency = a * 0.4
+                bd.Visible = true
+            end
+
+            local fill = esp.HealthFill
+            fill.Position = fillPos
+            fill.Size = fillSize
+            if esp._hc ~= hpCol then
+                esp._hc = hpCol
+                fill.Color = hpCol
+            end
+            fill.Transparency = a
+            fill.Visible = true
+
+            if hb.ShowText then
+                local ht = esp.HealthText
+                if not ht then
+                    ht = makeDrawing("Text", {
+                        Size = hb.TextSize, Font = Enum.Font.GothamBold,
+                        Outline = true, OutlineColor = BLACK, Center = true, Visible = false,
+                    })
+                    esp.HealthText = ht
+                end
+                if ht then
+                    local hpNow = floor(hum.Health + 0.5)
+                    if esp._hpT ~= hpNow or esp._hpM ~= hum.MaxHealth then
+                        esp._hpT, esp._hpM = hpNow, hum.MaxHealth
+                        ht.Text = format("%d/%d", hpNow, floor(hum.MaxHealth + 0.5))
+                    end
+                    local tx, ty
+                    if isBottom then
+                        tx, ty = cx, by + sh + hb.Offset + barW + 2
+                    else
+                        tx, ty = bx + sw + hb.Offset + barW + 6, by + sh * 0.5 - hb.TextSize * 0.5
+                    end
+                    ht.Position = V2.new(tx, ty)
+                    local htc = self:_color(player, false, hb.TextColor)
+                    if esp._hTc ~= htc then
+                        esp._hTc = htc
+                        ht.Color = htc
+                    end
+                    ht.Transparency = a
+                    ht.Visible = true
+                end
+            elseif esp.HealthText then
+                esp.HealthText.Visible = false
+            end
         end
     end
 
@@ -1188,43 +1546,70 @@ function NeonESP:_updatePlayer(player, esp, dt)
         if hsp.Z > 0 then
             local hd = cfg.HeadDot
             local hs = hd.Size
-            esp.HeadDot.Position = V2.new(hsp.X - hs * 0.5, hsp.Y - hs * 0.5)
             local col = self:_color(player, hd.Rainbow, hd.Color)
-            if esp._dc ~= col then
-                esp._dc = col
-                esp.HeadDot.Color = col
-            end
-            esp.HeadDot.Transparency = a * hd.Transparency
-            esp.HeadDot.Visible = true
-            if esp.HeadDotOutline then
-                esp.HeadDotOutline.Position = V2.new(hsp.X - hs * 0.5 - 1, hsp.Y - hs * 0.5 - 1)
-                if esp._doc ~= hd.OutlineColor then
-                    esp._doc = hd.OutlineColor
-                    esp.HeadDotOutline.Color = hd.OutlineColor
+            if hd.Method == "Gui" and esp.gui and esp.gui.HeadDot then
+                local gl = esp.gui.HeadDot
+                gl.Position = UDim2.fromOffset(hsp.X, hsp.Y)
+                gl.BackgroundColor3 = col
+                gl.BackgroundTransparency = 1 - (a * hd.Transparency)
+                gl.Visible = true
+                esp.HeadDot.Visible = false
+                if esp.HeadDotOutline then esp.HeadDotOutline.Visible = false end
+            else
+                esp.HeadDot.Position = V2.new(hsp.X - hs * 0.5, hsp.Y - hs * 0.5)
+                if esp._dc ~= col then
+                    esp._dc = col
+                    esp.HeadDot.Color = col
                 end
-                esp.HeadDotOutline.Transparency = a * hd.Transparency
-                esp.HeadDotOutline.Visible = true
+                esp.HeadDot.Transparency = a * hd.Transparency
+                esp.HeadDot.Visible = true
+                if esp.HeadDotOutline then
+                    esp.HeadDotOutline.Position = V2.new(hsp.X - hs * 0.5 - 1, hsp.Y - hs * 0.5 - 1)
+                    if esp._doc ~= hd.OutlineColor then
+                        esp._doc = hd.OutlineColor
+                        esp.HeadDotOutline.Color = hd.OutlineColor
+                    end
+                    esp.HeadDotOutline.Transparency = a * hd.Transparency
+                    esp.HeadDotOutline.Visible = true
+                end
             end
         else
             esp.HeadDot.Visible = false
             if esp.HeadDotOutline then esp.HeadDotOutline.Visible = false end
+            guiSetVisible(esp, "HeadDot", false)
         end
     end
 
     
     if esp.Distance then
-        if esp._dInt ~= distInt then
-            esp._dInt = distInt
-            esp.Distance.Text = format("%.0f", dist) .. cfg.Distance.Suffix
-        end
-        esp.Distance.Position = V2.new(cx, by + sh + 4)
+        local dText = format("%.0f", dist) .. cfg.Distance.Suffix
         local col = self:_color(player, cfg.Distance.Rainbow, cfg.Distance.Color)
-        if esp._dCol ~= col then
-            esp._dCol = col
-            esp.Distance.Color = col
+        if cfg.Distance.Method == "Gui" and esp.gui and esp.gui.Distance then
+            local gl = esp.gui.Distance
+            if esp._dInt ~= distInt then
+                esp._dInt = distInt
+                gl.Text = dText
+            end
+            gl.Position = UDim2.fromOffset(cx, by + sh + 4)
+            gl.TextColor3 = col
+            gl.TextTransparency = 1 - a
+            gl.TextSize = cfg.Distance.Size
+            gl.Size = UDim2.fromOffset(0, cfg.Distance.Size + 4)
+            gl.Visible = true
+            esp.Distance.Visible = false
+        else
+            if esp._dInt ~= distInt then
+                esp._dInt = distInt
+                esp.Distance.Text = dText
+            end
+            esp.Distance.Position = V2.new(cx, by + sh + 4)
+            if esp._dCol ~= col then
+                esp._dCol = col
+                esp.Distance.Color = col
+            end
+            esp.Distance.Transparency = a
+            esp.Distance.Visible = true
         end
-        esp.Distance.Transparency = a
-        esp.Distance.Visible = true
     end
 
     
@@ -1248,25 +1633,40 @@ function NeonESP:_updatePlayer(player, esp, dt)
             tCol = tc.Color:Lerp(tc.SecondaryColor or tc.Color, clamp(dist / fadeD, 0, 1))
         end
 
-        if esp.TracerGlow then
-            esp.TracerGlow.From = V2.new(oX, originY)
-            esp.TracerGlow.To = V2.new(cx, cy)
-            if esp._tgC ~= tCol then
-                esp._tgC = tCol
-                esp.TracerGlow.Color = tCol
+        if tc.Method == "Gui" and esp.gui and esp.gui.Tracer then
+            local fr = esp.gui.Tracer
+            local ddx, ddy = cx - oX, cy - originY
+            local len = sqrt(ddx * ddx + ddy * ddy)
+            local rot = atan2(ddy, ddx) * 180 / math.pi
+            fr.Position = UDim2.fromOffset(oX, originY)
+            fr.Size = UDim2.fromOffset(len, math.max(tc.Thickness, 1))
+            fr.Rotation = rot
+            fr.BackgroundColor3 = tCol
+            fr.BackgroundTransparency = 1 - sm.tracerAlpha
+            fr.Visible = true
+            esp.Tracer.Visible = false
+            if esp.TracerGlow then esp.TracerGlow.Visible = false end
+        else
+            if esp.TracerGlow then
+                esp.TracerGlow.From = V2.new(oX, originY)
+                esp.TracerGlow.To = V2.new(cx, cy)
+                if esp._tgC ~= tCol then
+                    esp._tgC = tCol
+                    esp.TracerGlow.Color = tCol
+                end
+                esp.TracerGlow.Transparency = sm.tracerAlpha * 0.12
+                esp.TracerGlow.Visible = true
             end
-            esp.TracerGlow.Transparency = sm.tracerAlpha * 0.12
-            esp.TracerGlow.Visible = true
-        end
 
-        esp.Tracer.From = V2.new(oX, originY)
-        esp.Tracer.To = V2.new(cx, cy)
-        if esp._trC ~= tCol then
-            esp._trC = tCol
-            esp.Tracer.Color = tCol
+            esp.Tracer.From = V2.new(oX, originY)
+            esp.Tracer.To = V2.new(cx, cy)
+            if esp._trC ~= tCol then
+                esp._trC = tCol
+                esp.Tracer.Color = tCol
+            end
+            esp.Tracer.Transparency = sm.tracerAlpha
+            esp.Tracer.Visible = true
         end
-        esp.Tracer.Transparency = sm.tracerAlpha
-        esp.Tracer.Visible = true
     end
 
     
@@ -1327,20 +1727,36 @@ function NeonESP:_updatePlayer(player, esp, dt)
         if tn then
             local te = cfg.ToolESP
             local str = te.Brackets and ("[ " .. tn .. " ]") or tn
-            if esp._toolStr ~= str then
-                esp._toolStr = str
-                esp.ToolText.Text = str
-            end
-            esp.ToolText.Position = V2.new(cx, by - 34)
             local col = self:_color(player, te.Rainbow, te.Color)
-            if esp._toolC ~= col then
-                esp._toolC = col
-                esp.ToolText.Color = col
+            if te.Method == "Gui" and esp.gui and esp.gui.ToolText then
+                local gl = esp.gui.ToolText
+                if esp._toolStr ~= str then
+                    esp._toolStr = str
+                    gl.Text = str
+                end
+                gl.Position = UDim2.fromOffset(cx, by - 34)
+                gl.TextColor3 = col
+                gl.TextTransparency = 1 - a
+                gl.TextSize = te.Size
+                gl.Size = UDim2.fromOffset(0, te.Size + 4)
+                gl.Visible = true
+                esp.ToolText.Visible = false
+            else
+                if esp._toolStr ~= str then
+                    esp._toolStr = str
+                    esp.ToolText.Text = str
+                end
+                esp.ToolText.Position = V2.new(cx, by - 34)
+                if esp._toolC ~= col then
+                    esp._toolC = col
+                    esp.ToolText.Color = col
+                end
+                esp.ToolText.Transparency = a
+                esp.ToolText.Visible = true
             end
-            esp.ToolText.Transparency = a
-            esp.ToolText.Visible = true
         else
             esp.ToolText.Visible = false
+            guiSetVisible(esp, "ToolText", false)
         end
     end
 
@@ -1653,6 +2069,10 @@ function NeonESP:Destroy()
     self._cache = {}
     self._playerColors = {}
     self._playerList = {}
+    if self._guiRoot then
+        pcall(function() self._guiRoot:Destroy() end)
+        self._guiRoot = nil
+    end
     return self
 end
 
