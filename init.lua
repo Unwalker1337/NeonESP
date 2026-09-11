@@ -240,6 +240,17 @@ NeonESP.Presets = {
         Distance = { Enabled = false },
         OffscreenArrows = { Enabled = false },
     },
+    Violet = {
+        Glow = { Enabled = false },
+        Rainbow = { Enabled = false },
+        Box = { Enabled = true, Mode = "2D", Thickness = 1, Transparency = 0.6, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(176, 130, 255) },
+        Name = { Enabled = true, Color = Color3.fromRGB(220, 200, 255) },
+        HealthBar = { Enabled = true, ShowText = true, HighColor = Color3.fromRGB(176, 130, 255), LowColor = Color3.fromRGB(90, 40, 140) },
+        Distance = { Enabled = true, Color = Color3.fromRGB(180, 160, 220) },
+        Tracers = { Enabled = true, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(140, 90, 220) },
+        HeadDot = { Enabled = true, Color = Color3.fromRGB(230, 215, 255) },
+        OffscreenArrows = { Enabled = true, Color = Color3.fromRGB(176, 130, 255), SecondaryColor = Color3.fromRGB(220, 200, 255), Transparency = 0.8 },
+    },
 }
 
 
